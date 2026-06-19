@@ -3,13 +3,15 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Personal Cybersecurity Assistant API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: breach
+    description: Data breach operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,63 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /breach/check:
+    post:
+      operationId: checkBreach
+      tags: [breach]
+      summary: Check data for breaches
+      description: Checks email, phone, username, IP, password, or domain against breach databases
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BreachQuery"
+      responses:
+        "200":
+          description: Breach check results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BreachResult"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /breach/catalog:
+    get:
+      operationId: getBreachCatalog
+      tags: [breach]
+      summary: Get all known breaches
+      description: Returns the full catalog of known data breaches from HIBP
+      responses:
+        "200":
+          description: List of known breaches
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BreachEntry"
+
+  /breach/stats:
+    get:
+      operationId: getBreachStats
+      tags: [breach]
+      summary: Get breach statistics
+      description: Returns aggregate statistics about the breach landscape
+      responses:
+        "200":
+          description: Breach statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BreachStats"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +93,161 @@ components:
       required:
         - status
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    BreachQuery:
+      type: object
+      required: [type, value]
+      properties:
+        type:
+          type: string
+          enum: [email, phone, username, ip, password, domain]
+        value:
+          type: string
+
+    BreachSource:
+      type: object
+      required: [name, date, dataClasses, pwnCount, riskLevel]
+      properties:
+        name:
+          type: string
+        title:
+          type: ["string", "null"]
+        date:
+          type: ["string", "null"]
+        addedDate:
+          type: ["string", "null"]
+        domain:
+          type: ["string", "null"]
+        dataClasses:
+          type: array
+          items:
+            type: string
+        pwnCount:
+          type: ["integer", "null"]
+        description:
+          type: ["string", "null"]
+        logoPath:
+          type: ["string", "null"]
+        isVerified:
+          type: boolean
+        isSensitive:
+          type: boolean
+        riskLevel:
+          type: string
+          enum: [low, medium, high, critical]
+
+    BreachResult:
+      type: object
+      required: [found, query, totalBreaches, riskScore, riskLevel, sources, tips]
+      properties:
+        found:
+          type: boolean
+        query:
+          type: object
+          required: [type, value]
+          properties:
+            type:
+              type: string
+            value:
+              type: string
+        totalBreaches:
+          type: integer
+        totalPwned:
+          type: ["integer", "null"]
+        riskScore:
+          type: integer
+          description: 0-100 risk score
+        riskLevel:
+          type: string
+          enum: [safe, low, medium, high, critical]
+        sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/BreachSource"
+        tips:
+          type: array
+          items:
+            type: string
+        summary:
+          type: ["string", "null"]
+
+    BreachEntry:
+      type: object
+      required: [name, title, domain, breachDate, addedDate, pwnCount, dataClasses, isVerified]
+      properties:
+        name:
+          type: string
+        title:
+          type: string
+        domain:
+          type: string
+        breachDate:
+          type: string
+        addedDate:
+          type: string
+        modifiedDate:
+          type: string
+        pwnCount:
+          type: integer
+        description:
+          type: ["string", "null"]
+        logoPath:
+          type: ["string", "null"]
+        dataClasses:
+          type: array
+          items:
+            type: string
+        isVerified:
+          type: boolean
+        isFabricated:
+          type: boolean
+        isSensitive:
+          type: boolean
+        isRetired:
+          type: boolean
+        isSpamList:
+          type: boolean
+
+    BreachStats:
+      type: object
+      required: [totalBreaches, totalPwnedAccounts, totalDataClasses, largestBreach, newestBreach, mostCommonDataTypes]
+      properties:
+        totalBreaches:
+          type: integer
+        totalPwnedAccounts:
+          type: integer
+        totalDataClasses:
+          type: integer
+        largestBreach:
+          type: object
+          required: [name, pwnCount]
+          properties:
+            name:
+              type: string
+            pwnCount:
+              type: integer
+        newestBreach:
+          type: object
+          required: [name, date]
+          properties:
+            name:
+              type: string
+            date:
+              type: string
+        mostCommonDataTypes:
+          type: array
+          items:
+            type: object
+            required: [type, count]
+            properties:
+              type:
+                type: string
+              count:
+                type: integer

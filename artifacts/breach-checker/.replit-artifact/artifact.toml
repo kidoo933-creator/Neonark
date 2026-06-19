@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Breach Checker"
+version = "1.0.0"
+id = "artifacts/breach-checker"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 20923
+
+[services.development]
+run = "pnpm --filter @workspace/breach-checker run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/breach-checker", "run", "build" ]
+publicDir = "artifacts/breach-checker/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20923"
+BASE_PATH = "/"

@@ -5,7 +5,9 @@
  * Personal Cybersecurity Assistant API
  * OpenAPI spec version: 0.1.0
  */
+import type { BreachQueryType } from './breachQueryType';
 
-export interface HealthStatus {
-  status: string;
+export interface BreachQuery {
+  type: BreachQueryType;
+  value: string;
 }
