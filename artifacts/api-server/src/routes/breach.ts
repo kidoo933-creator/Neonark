@@ -1,7 +1,6 @@
 import { Router, type IRouter } from "express";
 import crypto from "crypto";
 import { CheckBreachBody } from "@workspace/api-zod";
-import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
@@ -13,7 +12,6 @@ interface HibpBreach {
   Domain: string;
   BreachDate: string;
   AddedDate: string;
-  ModifiedDate: string;
   PwnCount: number;
   Description: string;
   LogoPath: string;
@@ -25,41 +23,23 @@ interface HibpBreach {
   IsSpamList: boolean;
 }
 
+interface LeakCheckSource {
+  name: string;
+  date?: string;
+}
+
 interface LeakCheckResult {
   success: boolean;
   found: number;
-  sources?: Array<{ name: string; date?: string }>;
+  sources?: LeakCheckSource[];
   fields?: string[];
 }
 
-interface EmailRepDetails {
-  blacklisted?: boolean;
-  malicious_activity?: boolean;
-  credentials_leaked?: boolean;
-  credentials_leaked_recent?: boolean;
-  data_breach?: boolean;
-  spam?: boolean;
-  profiles?: string[];
-  first_seen?: string;
-  last_seen?: string;
-  domain_exists?: boolean;
-  disposable?: boolean;
-  free_provider?: boolean;
-}
-
-interface EmailRepResult {
-  email: string;
-  reputation: string;
-  suspicious: boolean;
-  references: number;
-  details?: EmailRepDetails;
-}
-
-// ─── In-memory catalog cache ──────────────────────────────────────────────────
+// ─── Catalog cache ────────────────────────────────────────────────────────────
 
 let catalogCache: HibpBreach[] | null = null;
 let catalogCacheTime = 0;
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const CACHE_TTL_MS = 60 * 60 * 1000;
 
 async function fetchCatalog(): Promise<HibpBreach[]> {
   const now = Date.now();
@@ -68,17 +48,14 @@ async function fetchCatalog(): Promise<HibpBreach[]> {
     headers: { "User-Agent": "GuardianScan/1.0" },
   });
   if (!res.ok) throw new Error(`HIBP catalog error: ${res.status}`);
-  const data = (await res.json()) as HibpBreach[];
-  catalogCache = data;
+  catalogCache = (await res.json()) as HibpBreach[];
   catalogCacheTime = Date.now();
-  return data;
+  return catalogCache;
 }
 
-// ─── Source 1: HIBP k-anonymity password check (free, exact) ──────────────────
+// ─── HIBP k-anonymity password check ──────────────────────────────────────────
 
-async function checkPasswordHibp(
-  password: string
-): Promise<{ found: boolean; count: number }> {
+async function checkPasswordHibp(password: string): Promise<{ found: boolean; count: number }> {
   const hash = crypto.createHash("sha1").update(password).digest("hex").toUpperCase();
   const prefix = hash.slice(0, 5);
   const suffix = hash.slice(5);
@@ -96,71 +73,20 @@ async function checkPasswordHibp(
   return { found: false, count: 0 };
 }
 
-// ─── Source 2: LeakCheck.io free public API (per-email, real sources) ─────────
+// ─── LeakCheck.io free public API ─────────────────────────────────────────────
+// Returns real per-email/username/phone breach sources (no key required)
 
 async function checkLeakCheck(query: string): Promise<LeakCheckResult | null> {
   try {
     const res = await fetch(
       `https://leakcheck.io/api/public?check=${encodeURIComponent(query)}`,
       {
-        headers: {
-          "User-Agent": "GuardianScan/1.0",
-          Accept: "application/json",
-        },
+        headers: { "User-Agent": "GuardianScan/1.0", Accept: "application/json" },
         signal: AbortSignal.timeout(8000),
       }
     );
     if (!res.ok) return null;
-    const data = (await res.json()) as LeakCheckResult;
-    return data;
-  } catch {
-    return null;
-  }
-}
-
-// ─── Source 3: emailrep.io reputation (free, confirms breach status) ──────────
-
-async function checkEmailRep(email: string): Promise<EmailRepResult | null> {
-  try {
-    const res = await fetch(`https://emailrep.io/${encodeURIComponent(email)}`, {
-      headers: { "User-Agent": "GuardianScan/1.0" },
-      signal: AbortSignal.timeout(6000),
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as EmailRepResult;
-  } catch {
-    return null;
-  }
-}
-
-// ─── Source 4: BreachDirectory public search ──────────────────────────────────
-
-interface BreachDirResult {
-  success: boolean;
-  result?: Array<{
-    sources: string[];
-    fields?: string[];
-    hash?: string;
-    password?: string;
-  }>;
-  found?: number;
-}
-
-async function checkBreachDirectory(query: string): Promise<BreachDirResult | null> {
-  try {
-    const res = await fetch(
-      `https://breachdirectory.org/api?func=auto&term=${encodeURIComponent(query)}`,
-      {
-        headers: {
-          "User-Agent": "GuardianScan/1.0",
-          Accept: "application/json",
-        },
-        signal: AbortSignal.timeout(8000),
-      }
-    );
-    if (!res.ok) return null;
-    const data = (await res.json()) as BreachDirResult;
-    return data;
+    return (await res.json()) as LeakCheckResult;
   } catch {
     return null;
   }
@@ -183,24 +109,6 @@ function sourceRiskLevel(breach: HibpBreach): "low" | "medium" | "high" | "criti
   return "low";
 }
 
-function computeRiskScore(breaches: HibpBreach[], confirmed = false): number {
-  if (breaches.length === 0) return 0;
-  let score = Math.min(breaches.length * 8, 45);
-  if (confirmed) score += 20; // confirmed via external source
-  if (breaches.some((b) => b.IsSensitive)) score += 15;
-  if (breaches.some((b) => b.DataClasses.some((d) => d.toLowerCase().includes("password"))))
-    score += 15;
-  if (
-    breaches.some((b) =>
-      b.DataClasses.some((d) =>
-        d.toLowerCase().includes("credit") || d.toLowerCase().includes("bank")
-      )
-    )
-  )
-    score += 10;
-  return Math.min(score, 100);
-}
-
 function riskLevelFromScore(score: number): "safe" | "low" | "medium" | "high" | "critical" {
   if (score === 0) return "safe";
   if (score <= 20) return "low";
@@ -209,8 +117,31 @@ function riskLevelFromScore(score: number): "safe" | "low" | "medium" | "high" |
   return "critical";
 }
 
-function buildSources(breaches: HibpBreach[]) {
-  return breaches.map((b) => ({
+// Convert LeakCheck field names to human-readable data class names
+function fieldsToDataClasses(fields: string[]): string[] {
+  const map: Record<string, string> = {
+    password: "Passwords", email: "Email addresses", phone: "Phone numbers",
+    username: "Usernames", name: "Names", first_name: "Names", last_name: "Names",
+    address: "Physical addresses", address1: "Physical addresses",
+    dob: "Dates of birth", ip: "IP addresses", ip1: "IP addresses", ip2: "IP addresses",
+    ssn: "Social security numbers", credit_card: "Credit card data",
+    gender: "Genders", location: "Geographic locations", city: "Geographic locations",
+    country: "Geographic locations", state: "Geographic locations",
+    zip: "ZIP codes", province: "Geographic locations", region: "Geographic locations",
+    profile_name: "Usernames", origin: "Geographic locations",
+    company_name: "Employers", qqmail: "Email addresses",
+  };
+  const result = new Set<string>();
+  for (const f of fields) {
+    const mapped = map[f.toLowerCase()];
+    if (mapped) result.add(mapped);
+    else result.add(f.charAt(0).toUpperCase() + f.slice(1).replace(/_/g, " "));
+  }
+  return [...result];
+}
+
+function buildHibpSource(b: HibpBreach) {
+  return {
     name: b.Name,
     title: b.Title || null,
     date: b.BreachDate || null,
@@ -223,22 +154,134 @@ function buildSources(breaches: HibpBreach[]) {
     isVerified: b.IsVerified,
     isSensitive: b.IsSensitive,
     riskLevel: sourceRiskLevel(b),
-  }));
+  };
 }
 
-// ─── Personalized tip generator ───────────────────────────────────────────────
-// Each tip references actual service names, dates, and exposed data types found.
+// Build a minimal source entry for LeakCheck sources not found in HIBP catalog
+function buildLeakCheckStub(src: LeakCheckSource, dataClasses: string[]) {
+  const hasPassword = dataClasses.some((d) => d.toLowerCase().includes("password"));
+  const hasSensitive = dataClasses.some((d) =>
+    d.toLowerCase().includes("ssn") || d.toLowerCase().includes("credit")
+  );
+  const hasPhone = dataClasses.some((d) => d.toLowerCase().includes("phone"));
+  let riskLevel: "low" | "medium" | "high" | "critical" = "low";
+  if (hasSensitive) riskLevel = "critical";
+  else if (hasPassword) riskLevel = "high";
+  else if (hasPhone) riskLevel = "medium";
 
-function generatePersonalizedTips(
-  breaches: HibpBreach[],
+  const cleanName = src.name.replace(/\.(com|net|org|io|me|fr|vn|ru|de|uk|in)$/i, "");
+  const domain = src.name.includes(".") ? src.name : null;
+  const dateStr = src.date ? (src.date.length === 7 ? src.date + "-01" : src.date) : null;
+
+  return {
+    name: cleanName,
+    title: cleanName,
+    date: dateStr,
+    addedDate: null,
+    domain,
+    dataClasses,
+    pwnCount: null,
+    description: `This service was identified as a breach source by LeakCheck OSINT database. Your data was exposed here${dateStr ? " on or around " + new Date(dateStr).toLocaleDateString("en-US", { month: "long", year: "numeric" }) : ""}.`,
+    logoPath: null,
+    isVerified: true,
+    isSensitive: hasSensitive,
+    riskLevel,
+  };
+}
+
+// Match LeakCheck source names to HIBP catalog entries
+function matchToCatalog(sources: LeakCheckSource[], catalog: HibpBreach[]): {
+  matched: HibpBreach[];
+  unmatched: LeakCheckSource[];
+} {
+  const matched: HibpBreach[] = [];
+  const unmatched: LeakCheckSource[] = [];
+  const usedNames = new Set<string>();
+
+  for (const src of sources) {
+    const raw = src.name.toLowerCase();
+    const stripped = raw.replace(/\.(com|net|org|io|me|fr|vn|ru|de|uk|in|co)$/i, "").replace(/[^a-z0-9]/g, "");
+
+    let found = catalog.find((b) => {
+      const bn = b.Name.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const bt = b.Title.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const bd = b.Domain?.toLowerCase().replace(/[^a-z0-9]/g, "") ?? "";
+      return bn === stripped || bt === stripped || bd === stripped || bd.startsWith(stripped) || stripped.startsWith(bn);
+    });
+
+    if (!found) {
+      found = catalog.find((b) =>
+        b.Domain?.toLowerCase() === raw || b.Domain?.toLowerCase().replace("www.", "") === raw
+      );
+    }
+
+    if (found && !usedNames.has(found.Name)) {
+      matched.push(found);
+      usedNames.add(found.Name);
+    } else if (!found) {
+      unmatched.push(src);
+    }
+  }
+  return { matched, unmatched };
+}
+
+// Compute risk score based purely on real signals
+function computeRiskFromLeakCheck(
+  confirmed: boolean,
+  foundCount: number,
+  fields: string[],
+  hibpMatches: HibpBreach[],
+  unmatchedCount: number
+): number {
+  if (!confirmed) return 0;
+
+  const fl = fields.map((f) => f.toLowerCase());
+  let score = 15; // base: confirmed
+
+  // Scale by record count
+  if (foundCount > 10000) score += 25;
+  else if (foundCount > 1000) score += 20;
+  else if (foundCount > 100) score += 15;
+  else if (foundCount > 0) score += 10;
+
+  // Penalize based on exposed field types
+  if (fl.some((f) => f.includes("password"))) score += 20;
+  if (fl.some((f) => f.includes("ssn") || f.includes("social"))) score += 15;
+  if (fl.some((f) => f.includes("credit") || f.includes("bank"))) score += 15;
+  if (fl.some((f) => f.includes("phone"))) score += 5;
+  if (fl.some((f) => f.includes("dob"))) score += 5;
+
+  // HIBP matches with high-risk data
+  for (const b of hibpMatches) {
+    if (b.IsSensitive) score += 5;
+    if (sourceRiskLevel(b) === "critical") score += 3;
+    if (sourceRiskLevel(b) === "high") score += 2;
+  }
+
+  // Extra sources
+  score += Math.min(unmatchedCount * 2, 10);
+
+  return Math.min(score, 100);
+}
+
+// Generate personalized tips from confirmed breach data
+function buildTips(
+  hibpBreaches: HibpBreach[],
+  leakCheckFields: string[],
   queryType: string,
-  queryValue: string,
   confirmed: boolean
 ): string[] {
   const tips: string[] = [];
+  const fl = leakCheckFields.map((f) => f.toLowerCase());
+  const allDc = [...new Set(hibpBreaches.flatMap((b) => b.DataClasses.map((d) => d.toLowerCase())))];
+  const hasPasswords = fl.includes("password") || allDc.some((d) => d.includes("password"));
+  const hasPhone = fl.includes("phone") || allDc.some((d) => d.includes("phone"));
+  const hasSsn = fl.some((f) => f.includes("ssn")) || allDc.some((d) => d.includes("social security"));
+  const hasFinancial = fl.some((f) => f.includes("credit") || f.includes("bank")) ||
+    allDc.some((d) => d.includes("credit") || d.includes("bank"));
 
-  // Per-breach urgent tips (top 3 most dangerous)
-  const sorted = [...breaches].sort((a, b) => {
+  // Per-breach specific tips (top 3 by severity)
+  const sorted = [...hibpBreaches].sort((a, b) => {
     const rl = { critical: 4, high: 3, medium: 2, low: 1 };
     return rl[sourceRiskLevel(b)] - rl[sourceRiskLevel(a)];
   });
@@ -247,284 +290,164 @@ function generatePersonalizedTips(
     const dc = b.DataClasses;
     const dateStr = b.BreachDate
       ? new Date(b.BreachDate).toLocaleDateString("en-US", { month: "long", year: "numeric" })
-      : "an unknown date";
-    const serviceName = b.Title || b.Name;
+      : null;
+    const service = b.Title || b.Name;
     const domainStr = b.Domain ? ` (${b.Domain})` : "";
-    const hasPassword = dc.some((d) => d.toLowerCase().includes("password"));
-    const hasFinancial = dc.some(
-      (d) => d.toLowerCase().includes("credit") || d.toLowerCase().includes("bank")
-    );
-    const hasPhone = dc.some((d) => d.toLowerCase().includes("phone"));
+    const pwned = b.PwnCount ? b.PwnCount.toLocaleString() : "millions of";
+    const bHasPassword = dc.some((d) => d.toLowerCase().includes("password"));
+    const bHasFinancial = dc.some((d) => d.toLowerCase().includes("credit") || d.toLowerCase().includes("bank"));
+    const bHasPhone = dc.some((d) => d.toLowerCase().includes("phone"));
 
-    if (hasPassword) {
-      tips.push(
-        `Change your ${serviceName}${domainStr} password immediately — it was exposed in a breach on ${dateStr} alongside ${
-          b.PwnCount ? b.PwnCount.toLocaleString() : "millions of"
-        } other accounts. If you reused this password elsewhere, update those accounts too.`
-      );
-    } else if (hasFinancial) {
-      tips.push(
-        `Your financial data was exposed in the ${serviceName} breach (${dateStr}). Check your bank statements for unauthorized charges and consider placing a fraud alert with your credit bureau.`
-      );
-    } else if (hasPhone) {
-      tips.push(
-        `Your phone number was exposed in the ${serviceName} breach (${dateStr}). Contact your mobile carrier to add a SIM-lock PIN to prevent SIM-swap attacks.`
-      );
-    } else {
-      tips.push(
-        `Your data was exposed in the ${serviceName} breach on ${dateStr}. The following information was leaked: ${dc.slice(0, 3).join(", ")}. Review your ${serviceName} account settings and enable two-factor authentication.`
-      );
+    if (bHasPassword && dateStr) {
+      tips.push(`Change your ${service}${domainStr} password now — breached ${dateStr}, ${pwned} accounts exposed. Update any other account using the same password.`);
+    } else if (bHasFinancial && dateStr) {
+      tips.push(`Financial data exposed in the ${service} breach (${dateStr}). Check your statements for unauthorized charges and place a fraud alert with credit bureaus.`);
+    } else if (bHasPhone && dateStr) {
+      tips.push(`Phone number exposed in the ${service} breach (${dateStr}). Call your carrier and add a SIM-lock PIN to block SIM-swap attacks.`);
+    } else if (dateStr) {
+      tips.push(`${service} breach (${dateStr}) exposed: ${dc.slice(0, 3).join(", ")}. Log in and change your credentials — enable 2FA if available.`);
     }
   }
 
-  // Context-specific structural tips
-  const allDc = [...new Set(breaches.flatMap((b) => b.DataClasses))].map((d) => d.toLowerCase());
-
-  if (allDc.some((d) => d.includes("password")) && tips.length < 4) {
-    tips.push(
-      "Use a password manager (Bitwarden is free) to generate and store a unique password for every account. Reusing passwords across sites multiplies the damage of any single breach."
-    );
-  }
-  if (confirmed && tips.length < 4) {
-    tips.push(
-      "Enable two-factor authentication (2FA) on your most important accounts: email, banking, and social media. Even if your password is stolen, 2FA blocks unauthorized access."
-    );
-  }
-  if (allDc.some((d) => d.includes("social security") || d.includes("ssn"))) {
-    tips.push(
-      "Your Social Security Number was exposed. Place a credit freeze at Equifax, Experian, and TransUnion immediately. File an identity theft report at identitytheft.gov."
-    );
-  }
-  if (queryType === "email" && confirmed) {
-    tips.push(
-      `Check for any suspicious activity in your inbox. Attackers who have your email address often send targeted phishing emails pretending to be the services that were breached.`
-    );
-  }
+  if (hasPasswords && tips.length < 5)
+    tips.push("Use a password manager (Bitwarden is free) to generate unique passwords for every account. Reusing passwords multiplies breach damage.");
+  if (confirmed && tips.length < 5)
+    tips.push("Enable two-factor authentication on email, banking, and social accounts. A stolen password cannot log in without the second factor.");
+  if (hasSsn)
+    tips.push("Social Security Number was exposed. Freeze your credit at Equifax, Experian, and TransUnion immediately. File an identity theft report at identitytheft.gov.");
+  if (hasFinancial && !hasSsn)
+    tips.push("Financial data was exposed. Monitor bank statements and set up transaction alerts. Contact your bank to flag your account for suspicious activity.");
+  if (hasPhone && tips.length < 5)
+    tips.push("Phone number is in breach data. Add a SIM-lock PIN with your carrier to prevent SIM-swap attacks that bypass SMS two-factor authentication.");
   if (queryType === "password") {
-    tips.push(
-      "Never reuse this password anywhere. Generate a new, unique password for every account using a password manager."
-    );
-    tips.push(
-      "Enable two-factor authentication everywhere possible. A compromised password is far less dangerous when 2FA is active."
-    );
+    tips.push("Never reuse this password anywhere. Generate a new unique password for every account.");
+    tips.push("Enable two-factor authentication everywhere. Even a stolen password is useless with 2FA active.");
   }
+  if (queryType === "email" && confirmed && tips.length < 5)
+    tips.push("Watch your inbox for phishing. Attackers with your email send targeted messages impersonating the breached services. Verify all login prompts manually.");
 
-  // Deduplicate and limit
   const seen = new Set<string>();
-  return tips.filter((t) => {
-    if (seen.has(t)) return false;
-    seen.add(t);
-    return true;
-  }).slice(0, 6);
-}
-
-// ─── Match LeakCheck / BreachDirectory sources to HIBP catalog ────────────────
-
-function matchSourcesToCatalog(
-  sourceNames: string[],
-  catalog: HibpBreach[]
-): HibpBreach[] {
-  const matched: HibpBreach[] = [];
-  const usedNames = new Set<string>();
-
-  for (const srcName of sourceNames) {
-    const lower = srcName.toLowerCase().replace(/[^a-z0-9]/g, "");
-    // Try exact name match first
-    let found = catalog.find(
-      (b) =>
-        b.Name.toLowerCase().replace(/[^a-z0-9]/g, "") === lower ||
-        b.Title.toLowerCase().replace(/[^a-z0-9]/g, "") === lower
-    );
-    // Try domain match
-    if (!found) {
-      found = catalog.find(
-        (b) => b.Domain && b.Domain.toLowerCase().replace(/[^a-z0-9]/g, "").includes(lower)
-      );
-    }
-    // Try partial name match
-    if (!found) {
-      found = catalog.find(
-        (b) =>
-          b.Name.toLowerCase().includes(srcName.toLowerCase()) ||
-          b.Title.toLowerCase().includes(srcName.toLowerCase())
-      );
-    }
-    if (found && !usedNames.has(found.Name)) {
-      matched.push(found);
-      usedNames.add(found.Name);
-    }
-  }
-  return matched;
+  return tips.filter((t) => { if (seen.has(t)) return false; seen.add(t); return true; }).slice(0, 6);
 }
 
 // ─── POST /breach/check ───────────────────────────────────────────────────────
 
 router.post("/breach/check", async (req, res): Promise<void> => {
   const parsed = CheckBreachBody.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
-    return;
-  }
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
   const { type, value } = parsed.data;
-  req.log.info({ type }, "Breach check requested");
 
   try {
     // ── Password ──────────────────────────────────────────────────────────────
     if (type === "password") {
       const result = await checkPasswordHibp(value);
-      const score = result.found
-        ? Math.min(50 + Math.log10(result.count + 1) * 15, 100)
-        : 0;
-      const riskLevel = riskLevelFromScore(Math.round(score));
-      const tips = generatePersonalizedTips([], "password", value, result.found);
-      const summary = result.found
-        ? `This exact password appeared in ${result.count.toLocaleString()} breach records across multiple databases. It is fully compromised and must never be used again.`
-        : "This password has not been found in any of the 14+ billion breach records checked. It currently appears safe.";
-      const sources = result.found
-        ? [
-            {
-              name: "HibpPasswordDatabase",
-              title: "HIBP Pwned Passwords — 14 Billion+ Records",
-              date: null,
-              addedDate: null,
-              domain: null,
-              dataClasses: ["Passwords"],
-              pwnCount: result.count,
-              description: `This password hash appeared exactly ${result.count.toLocaleString()} times in aggregated breach databases. Attackers use these lists in credential-stuffing attacks against every major platform.`,
-              logoPath: null,
-              isVerified: true,
-              isSensitive: true,
-              riskLevel: "critical" as const,
-            },
-          ]
-        : [];
+      const score = result.found ? Math.min(50 + Math.log10(result.count + 1) * 15, 100) : 0;
+      const tips = buildTips([], result.found ? ["password"] : [], "password", result.found);
       res.json({
         found: result.found,
         query: { type, value: "••••••••" },
         totalBreaches: result.found ? 1 : 0,
         totalPwned: result.count,
         riskScore: Math.round(score),
-        riskLevel,
-        sources,
+        riskLevel: riskLevelFromScore(Math.round(score)),
+        sources: result.found ? [{
+          name: "HibpPasswordDatabase",
+          title: "HIBP Pwned Passwords — 14 Billion+ Records",
+          date: null, addedDate: null, domain: null,
+          dataClasses: ["Passwords"],
+          pwnCount: result.count,
+          description: `This exact password appeared ${result.count.toLocaleString()} times across known breach databases. Attackers use these lists in credential-stuffing attacks against every major platform.`,
+          logoPath: null, isVerified: true, isSensitive: true, riskLevel: "critical",
+        }] : [],
         tips,
-        summary,
+        summary: result.found
+          ? `This exact password appeared in ${result.count.toLocaleString()} breach records across 14+ billion password database. It is fully compromised.`
+          : "This password was not found in any of the 14+ billion breach records checked. It currently appears safe.",
       });
       return;
     }
 
-    // ── Load catalog (shared for all non-password types) ──────────────────────
     const catalog = await fetchCatalog();
 
     // ── Email ─────────────────────────────────────────────────────────────────
     if (type === "email") {
       const emailDomain = value.split("@")[1]?.toLowerCase() ?? "";
 
-      // Fire all external sources in parallel
-      const [leakCheck, emailRep, breachDir] = await Promise.all([
-        checkLeakCheck(value),
-        checkEmailRep(value),
-        checkBreachDirectory(value),
-      ]);
+      // LeakCheck is the primary source for real per-email data
+      const leakCheck = await checkLeakCheck(value);
 
-      req.log.info(
-        {
-          leakCheckFound: leakCheck?.found,
-          emailRepBreach: emailRep?.details?.data_breach,
-          breachDirFound: breachDir?.found,
-        },
-        "Email check sources"
-      );
+      let confirmed = false;
+      let leakCheckFound = 0;
+      let leakCheckFields: string[] = [];
+      let leakCheckSources: LeakCheckSource[] = [];
 
-      // Collect confirmed source names from real APIs
-      const confirmedSourceNames: string[] = [];
-      let externallyConfirmed = false;
-
-      // LeakCheck returns exact source names per email
-      if (leakCheck?.success && leakCheck.found > 0 && leakCheck.sources) {
-        externallyConfirmed = true;
-        confirmedSourceNames.push(...leakCheck.sources.map((s) => (typeof s === "string" ? s : s.name)));
+      if (leakCheck?.success && (leakCheck.found ?? 0) > 0) {
+        confirmed = true;
+        leakCheckFound = leakCheck.found;
+        leakCheckFields = leakCheck.fields ?? [];
+        leakCheckSources = leakCheck.sources ?? [];
       }
 
-      // BreachDirectory also returns source names
-      if (breachDir?.success && breachDir.found && breachDir.found > 0 && breachDir.result) {
-        externallyConfirmed = true;
-        for (const r of breachDir.result) {
-          confirmedSourceNames.push(...(r.sources ?? []));
-        }
-      }
-
-      // Match confirmed source names to full HIBP catalog entries
-      let confirmedBreaches = matchSourcesToCatalog(
-        [...new Set(confirmedSourceNames)],
-        catalog
-      );
-
-      // Always add exact domain breaches (service the email belongs to)
+      // Exact domain breaches (email's own service was breached)
       const domainBreaches = catalog.filter(
         (b) => b.Domain && b.Domain.toLowerCase() === emailDomain
       );
+      if (domainBreaches.length > 0) confirmed = true;
+
+      // If not confirmed by any source, return clean result
+      if (!confirmed) {
+        res.json({
+          found: false,
+          query: { type, value },
+          totalBreaches: 0,
+          totalPwned: 0,
+          riskScore: 0,
+          riskLevel: "safe",
+          sources: [],
+          tips: [
+            "Keep your email address private and avoid signing up for services you don't trust.",
+            "Enable two-factor authentication on your email account as a precaution.",
+          ],
+          summary: "No breach data found for this email address in our database. Your email appears to be clean — but new breaches are added daily, so check periodically.",
+        });
+        return;
+      }
+
+      // Match LeakCheck sources to HIBP catalog
+      const { matched: hibpMatched, unmatched: lcUnmatched } = matchToCatalog(leakCheckSources, catalog);
+
+      // Add domain breaches to matched list
       for (const db of domainBreaches) {
-        if (!confirmedBreaches.find((b) => b.Name === db.Name)) {
-          confirmedBreaches.push(db);
-          externallyConfirmed = true;
-        }
+        if (!hibpMatched.find((b) => b.Name === db.Name)) hibpMatched.push(db);
       }
 
-      // If emailrep confirms breach but we have no confirmed sources yet,
-      // show the largest known breaches that include email addresses
-      if (
-        (emailRep?.details?.data_breach || emailRep?.details?.credentials_leaked) &&
-        confirmedBreaches.length === 0
-      ) {
-        externallyConfirmed = true;
-        const topEmailBreaches = catalog
-          .filter(
-            (b) =>
-              b.IsVerified &&
-              !b.IsSpamList &&
-              b.DataClasses.some((d) => d.toLowerCase().includes("email"))
-          )
-          .sort((a, b) => b.PwnCount - a.PwnCount)
-          .slice(0, 10);
-        confirmedBreaches.push(...topEmailBreaches);
-      }
+      // Build stub sources for unmatched LeakCheck entries
+      const dataClasses = fieldsToDataClasses(leakCheckFields);
+      const stubSources = lcUnmatched.slice(0, 15).map((s) => buildLeakCheckStub(s, dataClasses));
 
-      // If still nothing — provide relevant catalog matches as potential exposure
-      if (confirmedBreaches.length === 0) {
-        const potentialBreaches = catalog
-          .filter(
-            (b) =>
-              b.IsVerified &&
-              !b.IsSpamList &&
-              b.DataClasses.some((d) => d.toLowerCase().includes("email"))
-          )
-          .sort((a, b) => b.PwnCount - a.PwnCount)
-          .slice(0, 8);
-        confirmedBreaches.push(...potentialBreaches);
-      }
+      // All sources: HIBP-enriched first, then stubs
+      const allSources = [
+        ...hibpMatched.map(buildHibpSource),
+        ...stubSources,
+      ];
 
-      const sources = buildSources(confirmedBreaches);
-      const score = computeRiskScore(confirmedBreaches, externallyConfirmed);
-      const riskLevel = riskLevelFromScore(score);
-      const tips = generatePersonalizedTips(confirmedBreaches, "email", value, externallyConfirmed);
+      const score = computeRiskFromLeakCheck(confirmed, leakCheckFound, leakCheckFields, hibpMatched, lcUnmatched.length);
+      const tips = buildTips(hibpMatched, leakCheckFields, "email", confirmed);
 
-      const totalPwned = confirmedBreaches.reduce((sum, b) => sum + (b.PwnCount ?? 0), 0);
-
-      const summary = externallyConfirmed
-        ? `Your email was confirmed in ${confirmedBreaches.length} data breach${confirmedBreaches.length !== 1 ? "es" : ""} across ${confirmedSourceNames.length > 0 ? confirmedSourceNames.length : confirmedBreaches.length} source${confirmedSourceNames.length !== 1 ? "s" : ""}. Approximately ${totalPwned.toLocaleString()} accounts were affected across these incidents.`
-        : `No confirmed breach was found for this exact email in our free sources. The breaches below represent services that have been compromised and may include your account. For a definitive per-email check, the HIBP paid API ($3.50/month) provides exact matches.`;
+      const totalPwned = hibpMatched.reduce((s, b) => s + (b.PwnCount ?? 0), 0);
+      const totalSources = leakCheckSources.length || hibpMatched.length;
 
       res.json({
-        found: externallyConfirmed || confirmedBreaches.length > 0,
+        found: true,
         query: { type, value },
-        totalBreaches: confirmedBreaches.length,
+        totalBreaches: allSources.length,
         totalPwned,
         riskScore: score,
-        riskLevel,
-        sources,
+        riskLevel: riskLevelFromScore(score),
+        sources: allSources,
         tips,
-        summary,
+        summary: `Your email was confirmed in ${totalSources} breach source${totalSources !== 1 ? "s" : ""} (${leakCheckFound.toLocaleString()} records found). ${dataClasses.length > 0 ? "Exposed data types: " + dataClasses.slice(0, 4).join(", ") + "." : ""}`,
       });
       return;
     }
@@ -532,227 +455,130 @@ router.post("/breach/check", async (req, res): Promise<void> => {
     // ── Domain ─────────────────────────────────────────────────────────────────
     if (type === "domain") {
       const domainLower = value.toLowerCase().replace(/^www\./, "");
+      const exactMatches = catalog.filter((b) => b.Domain && b.Domain.toLowerCase() === domainLower);
 
-      // Check LeakCheck and BreachDirectory for domain-level results in parallel
-      const [leakCheck, breachDir] = await Promise.all([
-        checkLeakCheck(domainLower),
-        checkBreachDirectory(domainLower),
-      ]);
-
-      const confirmedSourceNames: string[] = [];
-      if (leakCheck?.success && leakCheck.found > 0 && leakCheck.sources) {
-        confirmedSourceNames.push(...leakCheck.sources.map((s) => (typeof s === "string" ? s : s.name)));
-      }
-      if (breachDir?.success && breachDir.found && breachDir.result) {
-        for (const r of breachDir.result) confirmedSourceNames.push(...(r.sources ?? []));
-      }
-
-      // Exact domain match from catalog
-      const exactMatches = catalog.filter(
-        (b) => b.Domain && b.Domain.toLowerCase() === domainLower
-      );
-      const confirmedMatches = matchSourcesToCatalog([...new Set(confirmedSourceNames)], catalog);
-
-      // Merge, dedup
+      // Also try LeakCheck for domain
+      const leakCheck = await checkLeakCheck(domainLower);
+      const lcSources: LeakCheckSource[] = leakCheck?.success && leakCheck.found > 0 ? leakCheck.sources ?? [] : [];
+      const { matched: lcMatched } = matchToCatalog(lcSources, catalog);
       const allMatched = [...exactMatches];
-      for (const b of confirmedMatches) {
-        if (!allMatched.find((m) => m.Name === b.Name)) allMatched.push(b);
-      }
+      for (const b of lcMatched) if (!allMatched.find((m) => m.Name === b.Name)) allMatched.push(b);
 
       const confirmed = allMatched.length > 0;
-      const sources = buildSources(allMatched);
-      const score = computeRiskScore(allMatched, confirmed);
-      const riskLevel = riskLevelFromScore(score);
-      const tips = generatePersonalizedTips(allMatched, "domain", value, confirmed);
-      const totalPwned = allMatched.reduce((sum, b) => sum + (b.PwnCount ?? 0), 0);
+      const score = computeRiskFromLeakCheck(confirmed, leakCheck?.found ?? 0, leakCheck?.fields ?? [], allMatched, 0);
+      const tips = buildTips(allMatched, leakCheck?.fields ?? [], "domain", confirmed);
+      const totalPwned = allMatched.reduce((s, b) => s + (b.PwnCount ?? 0), 0);
 
       res.json({
-        found: allMatched.length > 0,
+        found: confirmed,
         query: { type, value },
         totalBreaches: allMatched.length,
         totalPwned,
-        riskScore: score,
-        riskLevel,
-        sources,
+        riskScore: confirmed ? score : 0,
+        riskLevel: confirmed ? riskLevelFromScore(score) : "safe",
+        sources: allMatched.map(buildHibpSource),
         tips,
-        summary:
-          allMatched.length > 0
-            ? `The domain "${value}" was directly involved in ${allMatched.length} confirmed breach${allMatched.length !== 1 ? "es" : ""}, exposing approximately ${totalPwned.toLocaleString()} records.`
-            : `No known breaches found for domain "${value}" in public databases. This domain may be clean, or may not yet be indexed.`,
+        summary: confirmed
+          ? `Domain "${value}" was involved in ${allMatched.length} confirmed breach${allMatched.length !== 1 ? "es" : ""}, exposing ~${totalPwned.toLocaleString()} records.`
+          : `No known breaches found for domain "${value}". This domain appears clean in public databases.`,
       });
       return;
     }
 
-    // ── Username ──────────────────────────────────────────────────────────────
+    // ── Username ───────────────────────────────────────────────────────────────
     if (type === "username") {
-      const [leakCheck, breachDir] = await Promise.all([
-        checkLeakCheck(value),
-        checkBreachDirectory(value),
-      ]);
-
-      const confirmedSourceNames: string[] = [];
-      let confirmed = false;
-      if (leakCheck?.success && leakCheck.found > 0 && leakCheck.sources) {
-        confirmed = true;
-        confirmedSourceNames.push(...leakCheck.sources.map((s) => (typeof s === "string" ? s : s.name)));
-      }
-      if (breachDir?.success && breachDir.found && breachDir.result) {
-        confirmed = true;
-        for (const r of breachDir.result) confirmedSourceNames.push(...(r.sources ?? []));
-      }
-
-      const confirmedBreaches = matchSourcesToCatalog([...new Set(confirmedSourceNames)], catalog);
-
-      // Also add breaches that directly expose usernames
-      const usernameBreaches = catalog
-        .filter(
-          (b) =>
-            b.IsVerified &&
-            b.DataClasses.some((d) => d.toLowerCase().includes("username")) &&
-            !confirmedBreaches.find((cb) => cb.Name === b.Name)
-        )
-        .sort((a, b) => b.PwnCount - a.PwnCount)
-        .slice(0, confirmed ? 5 : 10);
-
-      const allMatched = [...confirmedBreaches, ...usernameBreaches];
-      const sources = buildSources(allMatched);
-      const score = computeRiskScore(allMatched, confirmed);
-      const riskLevel = riskLevelFromScore(score);
-      const tips = generatePersonalizedTips(allMatched, "username", value, confirmed);
-      const totalPwned = allMatched.reduce((sum, b) => sum + (b.PwnCount ?? 0), 0);
+      const leakCheck = await checkLeakCheck(value);
+      const confirmed = !!(leakCheck?.success && (leakCheck.found ?? 0) > 0);
+      const lcSources: LeakCheckSource[] = confirmed ? leakCheck!.sources ?? [] : [];
+      const lcFields: string[] = confirmed ? leakCheck!.fields ?? [] : [];
+      const { matched, unmatched } = matchToCatalog(lcSources, catalog);
+      const dataClasses = fieldsToDataClasses(lcFields);
+      const stubs = unmatched.slice(0, 10).map((s) => buildLeakCheckStub(s, dataClasses));
+      const allSources = [...matched.map(buildHibpSource), ...stubs];
+      const score = computeRiskFromLeakCheck(confirmed, leakCheck?.found ?? 0, lcFields, matched, unmatched.length);
+      const tips = buildTips(matched, lcFields, "username", confirmed);
+      const totalPwned = matched.reduce((s, b) => s + (b.PwnCount ?? 0), 0);
 
       res.json({
-        found: allMatched.length > 0,
+        found: confirmed,
         query: { type, value },
-        totalBreaches: allMatched.length,
+        totalBreaches: allSources.length,
         totalPwned,
-        riskScore: score,
-        riskLevel,
-        sources,
-        tips,
+        riskScore: confirmed ? score : 0,
+        riskLevel: confirmed ? riskLevelFromScore(score) : "safe",
+        sources: allSources,
+        tips: confirmed ? tips : ["This username does not appear in known public breach databases. Keep monitoring as new breaches are added regularly."],
         summary: confirmed
-          ? `The username "${value}" was found in ${confirmedBreaches.length} confirmed data breach${confirmedBreaches.length !== 1 ? "es" : ""}. Your accounts on these services may be compromised.`
-          : `No confirmed breach found for username "${value}" in public OSINT databases. The breaches shown expose usernames broadly and may include yours.`,
+          ? `Username "${value}" found in ${(leakCheck!.found ?? 0).toLocaleString()} records across ${lcSources.length || allSources.length} breach source${lcSources.length !== 1 ? "s" : ""}. Exposed: ${dataClasses.slice(0, 3).join(", ") || "account data"}.`
+          : `Username "${value}" was not found in any known breach database. It appears clean.`,
       });
       return;
     }
 
-    // ── Phone ─────────────────────────────────────────────────────────────────
+    // ── Phone ──────────────────────────────────────────────────────────────────
     if (type === "phone") {
-      // Normalize phone: strip spaces, dashes, parentheses
       const cleanPhone = value.replace(/[\s\-().+]/g, "");
-
-      const [leakCheck, breachDir] = await Promise.all([
-        checkLeakCheck(cleanPhone),
-        checkBreachDirectory(cleanPhone),
-      ]);
-
-      const confirmedSourceNames: string[] = [];
-      let confirmed = false;
-      if (leakCheck?.success && leakCheck.found > 0 && leakCheck.sources) {
-        confirmed = true;
-        confirmedSourceNames.push(...leakCheck.sources.map((s) => (typeof s === "string" ? s : s.name)));
-      }
-      if (breachDir?.success && breachDir.found && breachDir.result) {
-        confirmed = true;
-        for (const r of breachDir.result) confirmedSourceNames.push(...(r.sources ?? []));
-      }
-
-      const confirmedBreaches = matchSourcesToCatalog([...new Set(confirmedSourceNames)], catalog);
-
-      // Supplement with catalog breaches known to expose phone numbers
-      const phoneBreaches = catalog
-        .filter(
-          (b) =>
-            b.IsVerified &&
-            !b.IsSpamList &&
-            b.DataClasses.some((d) => d.toLowerCase().includes("phone")) &&
-            !confirmedBreaches.find((cb) => cb.Name === b.Name)
-        )
-        .sort((a, b) => b.PwnCount - a.PwnCount)
-        .slice(0, confirmed ? 6 : 12);
-
-      const allMatched = [...confirmedBreaches, ...phoneBreaches];
-      const sources = buildSources(allMatched);
-      const score = computeRiskScore(allMatched, confirmed);
-      const riskLevel = riskLevelFromScore(score);
-      const tips = generatePersonalizedTips(allMatched, "phone", value, confirmed);
-      const totalPwned = allMatched.reduce((sum, b) => sum + (b.PwnCount ?? 0), 0);
-
-      const summary = confirmed
-        ? `This phone number was found in ${confirmedBreaches.length} confirmed breach${confirmedBreaches.length !== 1 ? "es" : ""}. Attackers with your number can attempt SIM swaps and targeted phishing calls.`
-        : `Found ${phoneBreaches.length} major breaches known to expose phone numbers. Your number may be among the records exposed. ${phoneBreaches[0] ? `The largest was the ${phoneBreaches[0].Title} breach affecting ${phoneBreaches[0].PwnCount.toLocaleString()} accounts.` : ""}`;
+      const leakCheck = await checkLeakCheck(cleanPhone);
+      const confirmed = !!(leakCheck?.success && (leakCheck.found ?? 0) > 0);
+      const lcSources: LeakCheckSource[] = confirmed ? leakCheck!.sources ?? [] : [];
+      const lcFields: string[] = confirmed ? leakCheck!.fields ?? [] : [];
+      const { matched, unmatched } = matchToCatalog(lcSources, catalog);
+      const dataClasses = fieldsToDataClasses(lcFields);
+      const stubs = unmatched.slice(0, 10).map((s) => buildLeakCheckStub(s, dataClasses));
+      const allSources = [...matched.map(buildHibpSource), ...stubs];
+      const score = computeRiskFromLeakCheck(confirmed, leakCheck?.found ?? 0, lcFields, matched, unmatched.length);
+      const tips = buildTips(matched, lcFields, "phone", confirmed);
+      const totalPwned = matched.reduce((s, b) => s + (b.PwnCount ?? 0), 0);
 
       res.json({
-        found: allMatched.length > 0,
+        found: confirmed,
         query: { type, value },
-        totalBreaches: allMatched.length,
+        totalBreaches: allSources.length,
         totalPwned,
-        riskScore: score,
-        riskLevel,
-        sources,
-        tips,
-        summary,
+        riskScore: confirmed ? score : 0,
+        riskLevel: confirmed ? riskLevelFromScore(score) : "safe",
+        sources: allSources,
+        tips: confirmed ? tips : ["This phone number was not found in known breach databases. Add a SIM-lock PIN with your carrier as a precautionary measure."],
+        summary: confirmed
+          ? `Phone number found in ${(leakCheck!.found ?? 0).toLocaleString()} records across ${lcSources.length || allSources.length} source${lcSources.length !== 1 ? "s" : ""}. Exposed: ${dataClasses.slice(0, 3).join(", ") || "account data"}.`
+          : `This phone number was not found in any known breach database. It appears clean.`,
       });
       return;
     }
 
-    // ── IP Address ────────────────────────────────────────────────────────────
+    // ── IP Address ─────────────────────────────────────────────────────────────
     if (type === "ip") {
-      const [leakCheck, breachDir] = await Promise.all([
-        checkLeakCheck(value),
-        checkBreachDirectory(value),
-      ]);
-
-      const confirmedSourceNames: string[] = [];
-      let confirmed = false;
-      if (leakCheck?.success && leakCheck.found > 0 && leakCheck.sources) {
-        confirmed = true;
-        confirmedSourceNames.push(...leakCheck.sources.map((s) => (typeof s === "string" ? s : s.name)));
-      }
-      if (breachDir?.success && breachDir.found && breachDir.result) {
-        confirmed = true;
-        for (const r of breachDir.result) confirmedSourceNames.push(...(r.sources ?? []));
-      }
-
-      const confirmedBreaches = matchSourcesToCatalog([...new Set(confirmedSourceNames)], catalog);
-
-      const ipBreaches = catalog
-        .filter(
-          (b) =>
-            b.IsVerified &&
-            b.DataClasses.some((d) => d.toLowerCase().includes("ip address")) &&
-            !confirmedBreaches.find((cb) => cb.Name === b.Name)
-        )
-        .sort((a, b) => b.PwnCount - a.PwnCount)
-        .slice(0, confirmed ? 5 : 10);
-
-      const allMatched = [...confirmedBreaches, ...ipBreaches];
-      const sources = buildSources(allMatched);
-      const score = computeRiskScore(allMatched, confirmed);
-      const riskLevel = riskLevelFromScore(score);
-      const tips = generatePersonalizedTips(allMatched, "ip", value, confirmed);
-      const totalPwned = allMatched.reduce((sum, b) => sum + (b.PwnCount ?? 0), 0);
+      const leakCheck = await checkLeakCheck(value);
+      const confirmed = !!(leakCheck?.success && (leakCheck.found ?? 0) > 0);
+      const lcSources: LeakCheckSource[] = confirmed ? leakCheck!.sources ?? [] : [];
+      const lcFields: string[] = confirmed ? leakCheck!.fields ?? [] : [];
+      const { matched, unmatched } = matchToCatalog(lcSources, catalog);
+      const dataClasses = fieldsToDataClasses(lcFields);
+      const stubs = unmatched.slice(0, 10).map((s) => buildLeakCheckStub(s, dataClasses));
+      const allSources = [...matched.map(buildHibpSource), ...stubs];
+      const score = computeRiskFromLeakCheck(confirmed, leakCheck?.found ?? 0, lcFields, matched, unmatched.length);
+      const tips = buildTips(matched, lcFields, "ip", confirmed);
+      const totalPwned = matched.reduce((s, b) => s + (b.PwnCount ?? 0), 0);
 
       res.json({
-        found: allMatched.length > 0,
+        found: confirmed,
         query: { type, value },
-        totalBreaches: allMatched.length,
+        totalBreaches: allSources.length,
         totalPwned,
-        riskScore: score,
-        riskLevel,
-        sources,
-        tips,
+        riskScore: confirmed ? score : 0,
+        riskLevel: confirmed ? riskLevelFromScore(score) : "safe",
+        sources: allSources,
+        tips: confirmed ? tips : ["This IP address was not found in known breach databases. Use a VPN to reduce IP-based tracking and future exposure."],
         summary: confirmed
-          ? `IP address ${value} was found in ${confirmedBreaches.length} confirmed breach${confirmedBreaches.length !== 1 ? "es" : ""}. Knowing your IP helps attackers map your network and launch targeted intrusions.`
-          : `Found ${ipBreaches.length} major breaches known to expose IP addresses. Your IP may appear in these datasets used by threat intelligence systems.`,
+          ? `IP address ${value} was found in ${(leakCheck!.found ?? 0).toLocaleString()} records. Exposed: ${dataClasses.slice(0, 3).join(", ") || "network data"}.`
+          : `IP address ${value} was not found in any known breach database. It appears clean.`,
       });
       return;
     }
 
     res.status(400).json({ error: "Unsupported query type" });
   } catch (err) {
-    req.log.error({ err }, "Breach check failed");
+    console.error("Breach check failed:", err);
     res.status(500).json({ error: "Failed to check breach data. Please try again." });
   }
 });
@@ -762,27 +588,16 @@ router.post("/breach/check", async (req, res): Promise<void> => {
 router.get("/breach/catalog", async (req, res): Promise<void> => {
   try {
     const catalog = await fetchCatalog();
-    res.json(
-      catalog.map((b) => ({
-        name: b.Name,
-        title: b.Title,
-        domain: b.Domain,
-        breachDate: b.BreachDate,
-        addedDate: b.AddedDate,
-        modifiedDate: b.ModifiedDate,
-        pwnCount: b.PwnCount,
-        description: b.Description,
-        logoPath: b.LogoPath,
-        dataClasses: b.DataClasses,
-        isVerified: b.IsVerified,
-        isFabricated: b.IsFabricated,
-        isSensitive: b.IsSensitive,
-        isRetired: b.IsRetired,
-        isSpamList: b.IsSpamList,
-      }))
-    );
+    res.json(catalog.map((b) => ({
+      name: b.Name, title: b.Title, domain: b.Domain,
+      breachDate: b.BreachDate, addedDate: b.AddedDate,
+      pwnCount: b.PwnCount, description: b.Description,
+      logoPath: b.LogoPath, dataClasses: b.DataClasses,
+      isVerified: b.IsVerified, isFabricated: b.IsFabricated,
+      isSensitive: b.IsSensitive, isRetired: b.IsRetired, isSpamList: b.IsSpamList,
+    })));
   } catch (err) {
-    req.log.error({ err }, "Failed to fetch breach catalog");
+    console.error(err);
     res.status(500).json({ error: "Failed to fetch breach catalog" });
   }
 });
@@ -792,36 +607,22 @@ router.get("/breach/catalog", async (req, res): Promise<void> => {
 router.get("/breach/stats", async (req, res): Promise<void> => {
   try {
     const catalog = await fetchCatalog();
-    const totalPwned = catalog.reduce((sum, b) => sum + (b.PwnCount ?? 0), 0);
-    const largest = catalog.reduce(
-      (max, b) => (b.PwnCount > (max?.PwnCount ?? 0) ? b : max),
-      catalog[0]
-    );
-    const newest = catalog
-      .filter((b) => b.BreachDate)
+    const totalPwned = catalog.reduce((s, b) => s + (b.PwnCount ?? 0), 0);
+    const largest = catalog.reduce((max, b) => b.PwnCount > (max?.PwnCount ?? 0) ? b : max, catalog[0]);
+    const newest = catalog.filter((b) => b.BreachDate)
       .sort((a, b) => new Date(b.BreachDate).getTime() - new Date(a.BreachDate).getTime())[0];
-
     const dcCount: Record<string, number> = {};
-    for (const breach of catalog) {
-      for (const dc of breach.DataClasses) {
-        dcCount[dc] = (dcCount[dc] ?? 0) + 1;
-      }
-    }
-    const mostCommonDataTypes = Object.entries(dcCount)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10)
-      .map(([type, count]) => ({ type, count }));
-
+    for (const breach of catalog) for (const dc of breach.DataClasses) dcCount[dc] = (dcCount[dc] ?? 0) + 1;
     res.json({
       totalBreaches: catalog.length,
       totalPwnedAccounts: totalPwned,
       totalDataClasses: new Set(catalog.flatMap((b) => b.DataClasses)).size,
       largestBreach: { name: largest?.Name ?? "", pwnCount: largest?.PwnCount ?? 0 },
       newestBreach: { name: newest?.Name ?? "", date: newest?.BreachDate ?? "" },
-      mostCommonDataTypes,
+      mostCommonDataTypes: Object.entries(dcCount).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([type, count]) => ({ type, count })),
     });
   } catch (err) {
-    req.log.error({ err }, "Failed to fetch breach stats");
+    console.error(err);
     res.status(500).json({ error: "Failed to fetch breach stats" });
   }
 });
