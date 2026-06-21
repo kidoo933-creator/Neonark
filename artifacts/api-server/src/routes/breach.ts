@@ -329,6 +329,72 @@ function matchToCatalog(sources: LeakCheckSource[], catalog: HibpBreach[]): {
   return { matched, unmatched };
 }
 
+// ─── Heuristic score when NO breach data exists ──────────────────────────────
+// Analyzes the credential itself to estimate how "targetable" it is
+
+function heuristicPrivacyScore(type: string, value: string): number {
+  if (type === "email") {
+    let s = 82;
+    const [local = "", domain = ""] = value.split("@");
+    const commonProviders = new Set(["gmail.com","yahoo.com","hotmail.com","outlook.com","aol.com","icloud.com","live.com","mail.com","msn.com","ymail.com"]);
+    if (commonProviders.has(domain.toLowerCase())) s -= 8;  // bulk-targeted providers
+    if (local.length <= 5) s -= 8;                          // very short = common name
+    if (local.length >= 16) s += 6;                         // long = more unique
+    if (/\d/.test(local)) s -= 4;                           // john123 pattern
+    if (/^(info|admin|support|contact|help|no.?reply|webmaster|noreply|sales|mail|office)\d*$/i.test(local)) s -= 12;
+    if (/^(john|jane|mike|sarah|david|chris|james|mary|robert|linda|michael|richard|thomas|daniel|mark|paul|kevin|jason|matthew|gary|stephen|andrew|peter|alex|nick|ben|sam|max|tom|emma|olivia|sophia|mia|emily|ella|lily|anna|kate|lisa|laura|amy|jessica|ashley|amanda|jennifer|melissa|rachel|karen|nancy|betty|helen)\d*$/i.test(local)) s -= 10;
+    return Math.max(55, Math.min(90, Math.round(s)));
+  }
+
+  if (type === "username") {
+    let s = 79;
+    const lower = value.toLowerCase();
+    if (/^(admin|administrator|user|test|guest|root|demo|default|support|service|info|webmaster|master|manager|moderator|staff|operator|superuser|sysadmin|helpdesk|anonymous|nobody|system)\d*$/.test(lower)) s = 53;
+    else if (/^(john|jane|mike|sarah|david|chris|james|mary|robert|linda|michael|richard|thomas|daniel|mark|paul|kevin|jason|matthew|gary|stephen|andrew|peter|alex|nick|ben|sam|max|tom|emma|olivia|sophia|mia|emily|ella|lily|anna|kate|lisa|laura|amy|jessica|ashley|amanda|jennifer|melissa|rachel|karen|nancy|betty|helen|dorothy|ruth|sharon|carol|barbara|patricia|donna|maria|michelle|ashley|brittany|amber|heather|diana|julie|joanna)\d*$/.test(lower)) s = 58;
+    if (value.length <= 4) s = Math.min(s, 60);
+    if (value.length >= 14) s += 7;
+    if (value.length >= 20) s += 5;
+    if (/[_\-.]/.test(value) && value.length >= 8) s += 5;
+    if (/[a-z]\d+[a-z]/i.test(value)) s += 3;              // numbers mid-string = more unique
+    return Math.max(52, Math.min(91, Math.round(s)));
+  }
+
+  if (type === "password") {
+    let s = 68;
+    const len = value.length;
+    const hasUpper = /[A-Z]/.test(value);
+    const hasLower = /[a-z]/.test(value);
+    const hasDigit = /[0-9]/.test(value);
+    const hasSpecial = /[^a-zA-Z0-9]/.test(value);
+    const charTypes = [hasUpper, hasLower, hasDigit, hasSpecial].filter(Boolean).length;
+    if (len >= 8) s += 5;
+    if (len >= 12) s += 8;
+    if (len >= 16) s += 9;
+    if (len >= 20) s += 6;
+    if (charTypes >= 3) s += 8;
+    if (charTypes >= 4) s += 6;
+    // Penalize common structures
+    if (/19[5-9]\d|20[0-2]\d/.test(value)) s -= 12;                   // year suffix
+    if (/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(value)) s -= 5;
+    if (/(123|234|345|456|567|678|789|890|abc|bcd|cde|def)/i.test(value)) s -= 10;
+    if (/(.)\1{2,}/.test(value)) s -= 8;                              // repeating chars
+    if (/(password|passwd|pass|secret|login|admin|welcome|access|monkey|dragon|qwerty|love|angel|shadow|master|123456|letmein|sunshine|iloveyou)/i.test(value)) s -= 15;
+    if (/^[a-zA-Z]+\d{1,4}$/.test(value) && !hasSpecial && len < 12) s -= 8; // word+numbers only
+    return Math.max(50, Math.min(100, Math.round(s)));
+  }
+
+  if (type === "phone") {
+    const digits = value.replace(/\D/g, "");
+    if (/(.)\1{5,}/.test(digits)) return 57;   // 555555555
+    if (/0123456789|9876543210/.test(digits)) return 54;
+    return 73;
+  }
+
+  if (type === "ip") return 79;
+  if (type === "domain") return 81;
+  return 76;
+}
+
 // ─── Privacy Score (higher = safer) ──────────────────────────────────────────
 
 function computePrivacyScore(opts: {
@@ -541,19 +607,26 @@ router.post("/breach/check", async (req, res): Promise<void> => {
       const isConfirmed = confirmed || domainBreaches.length > 0;
 
       if (!isConfirmed && platforms.every((p) => !p.exists)) {
+        const hScore = heuristicPrivacyScore(queryType, queryValue);
+        const hGrade = privacyGrade(hScore);
+        const notFoundTip = hScore < 65
+          ? `No confirmed breach yet, but this ${queryType} follows common patterns heavily targeted by attackers. Use a more unique value and enable 2FA.`
+          : hScore < 78
+          ? `No confirmed breach found. This ${queryType} has some common characteristics — consider making it more unique and enabling two-factor authentication.`
+          : `No breach data found for this ${queryType} in any monitored database. Keep monitoring — new breaches are added daily.`;
         return {
           found: false, totalBreaches: 0, totalPwned: 0,
-          privacyScore: 92, privacyGrade: "excellent" as const,
+          privacyScore: hScore, privacyGrade: hGrade,
           isCommonPassword: false,
           platformsFound: platforms,
           remediation: [],
           sources: [],
           tips: [
-            `No breach data found for this ${queryType} in any monitored database.`,
-            "Keep monitoring — new breaches are added daily. Check back regularly.",
+            notFoundTip,
             "Enable two-factor authentication as a precautionary measure.",
+            "Use a password manager to generate long, unique credentials for every account.",
           ],
-          summary: `No breach data found for this ${queryType}. It appears clean. Privacy score: Excellent.`,
+          summary: `No confirmed breach found for this ${queryType}. Privacy score: ${hScore}/100 (${hGrade}) — based on credential analysis.`,
         };
       }
 
@@ -629,7 +702,8 @@ router.post("/breach/check", async (req, res): Promise<void> => {
       res.json({
         found: confirmed, query: { type, value },
         totalBreaches: allMatched.length, totalPwned,
-        privacyScore: confirmed ? score : 92, privacyGrade: confirmed ? privacyGrade(score) : "excellent",
+        privacyScore: confirmed ? score : heuristicPrivacyScore("domain", value),
+        privacyGrade: confirmed ? privacyGrade(score) : privacyGrade(heuristicPrivacyScore("domain", value)),
         isCommonPassword: false, platformsFound: [], remediation,
         sources: allMatched.map(buildHibpSource), tips,
         summary: confirmed
