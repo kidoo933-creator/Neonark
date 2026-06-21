@@ -4,7 +4,19 @@ const path = require("path");
 
 const app = express();
 app.use(express.json());
+
+// Serve index.html explicitly for the root path (Windows-safe)
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
+});
+
 app.use(express.static(path.join(__dirname)));
+
+// SPA fallback — serve index.html for any non-API GET
+app.get("*", (req, res, next) => {
+  if (req.path.startsWith("/api/")) return next();
+  res.sendFile(path.join(__dirname, "index.html"));
+});
 
 // ─── RockYou top-500 common passwords ─────────────────────────────────────────
 const ROCKYOU_TOP = new Set([
