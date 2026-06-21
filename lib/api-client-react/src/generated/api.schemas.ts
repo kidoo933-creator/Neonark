@@ -30,6 +30,33 @@ export interface BreachQuery {
   value: string;
 }
 
+export type PlatformPresenceReputation = typeof PlatformPresenceReputation[keyof typeof PlatformPresenceReputation];
+
+
+export const PlatformPresenceReputation = {
+  major: 'major',
+  moderate: 'moderate',
+  obscure: 'obscure',
+} as const;
+
+export interface PlatformPresence {
+  name: string;
+  url: string;
+  reputation: PlatformPresenceReputation;
+  exists: boolean;
+}
+
+export interface BreachRemediation {
+  service: string;
+  /** @nullable */
+  domain?: string | null;
+  /** @nullable */
+  dataDeleteUrl?: string | null;
+  steps: string[];
+  /** @nullable */
+  breachDate?: string | null;
+}
+
 export type BreachSourceRiskLevel = typeof BreachSourceRiskLevel[keyof typeof BreachSourceRiskLevel];
 
 
@@ -67,14 +94,17 @@ export type BreachResultQuery = {
   value: string;
 };
 
-export type BreachResultRiskLevel = typeof BreachResultRiskLevel[keyof typeof BreachResultRiskLevel];
+/**
+ * Human-readable grade based on privacyScore
+ */
+export type BreachResultPrivacyGrade = typeof BreachResultPrivacyGrade[keyof typeof BreachResultPrivacyGrade];
 
 
-export const BreachResultRiskLevel = {
-  safe: 'safe',
-  low: 'low',
-  medium: 'medium',
-  high: 'high',
+export const BreachResultPrivacyGrade = {
+  excellent: 'excellent',
+  good: 'good',
+  fair: 'fair',
+  poor: 'poor',
   critical: 'critical',
 } as const;
 
@@ -84,13 +114,17 @@ export interface BreachResult {
   totalBreaches: number;
   /** @nullable */
   totalPwned?: number | null;
-  /** 0-100 risk score */
-  riskScore: number;
-  riskLevel: BreachResultRiskLevel;
+  /** 0-100 privacy score — higher means safer */
+  privacyScore: number;
+  /** Human-readable grade based on privacyScore */
+  privacyGrade: BreachResultPrivacyGrade;
   sources: BreachSource[];
   tips: string[];
   /** @nullable */
   summary?: string | null;
+  platformsFound?: PlatformPresence[];
+  remediation?: BreachRemediation[];
+  isCommonPassword?: boolean;
 }
 
 export interface BreachEntry {

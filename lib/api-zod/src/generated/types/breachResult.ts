@@ -5,9 +5,11 @@
  * Personal Cybersecurity Assistant API
  * OpenAPI spec version: 0.1.0
  */
+import type { BreachRemediation } from './breachRemediation';
+import type { BreachResultPrivacyGrade } from './breachResultPrivacyGrade';
 import type { BreachResultQuery } from './breachResultQuery';
-import type { BreachResultRiskLevel } from './breachResultRiskLevel';
 import type { BreachSource } from './breachSource';
+import type { PlatformPresence } from './platformPresence';
 
 export interface BreachResult {
   found: boolean;
@@ -15,11 +17,15 @@ export interface BreachResult {
   totalBreaches: number;
   /** @nullable */
   totalPwned?: number | null;
-  /** 0-100 risk score */
-  riskScore: number;
-  riskLevel: BreachResultRiskLevel;
+  /** 0-100 privacy score — higher means safer */
+  privacyScore: number;
+  /** Human-readable grade based on privacyScore */
+  privacyGrade: BreachResultPrivacyGrade;
   sources: BreachSource[];
   tips: string[];
   /** @nullable */
   summary?: string | null;
+  platformsFound?: PlatformPresence[];
+  remediation?: BreachRemediation[];
+  isCommonPassword?: boolean;
 }

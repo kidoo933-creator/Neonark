@@ -9,7 +9,6 @@ import * as zod from 'zod';
 
 
 /**
- * Returns server health status
  * @summary Health check
  */
 export const HealthCheckResponse = zod.object({
@@ -18,7 +17,6 @@ export const HealthCheckResponse = zod.object({
 
 
 /**
- * Checks email, phone, username, IP, password, or domain against breach databases
  * @summary Check data for breaches
  */
 export const CheckBreachBody = zod.object({
@@ -34,8 +32,8 @@ export const CheckBreachResponse = zod.object({
 }),
   "totalBreaches": zod.number(),
   "totalPwned": zod.number().nullish(),
-  "riskScore": zod.number().describe('0-100 risk score'),
-  "riskLevel": zod.enum(['safe', 'low', 'medium', 'high', 'critical']),
+  "privacyScore": zod.number().describe('0-100 privacy score — higher means safer'),
+  "privacyGrade": zod.enum(['excellent', 'good', 'fair', 'poor', 'critical']).describe('Human-readable grade based on privacyScore'),
   "sources": zod.array(zod.object({
   "name": zod.string(),
   "title": zod.string().nullish(),
@@ -51,12 +49,25 @@ export const CheckBreachResponse = zod.object({
   "riskLevel": zod.enum(['low', 'medium', 'high', 'critical'])
 })),
   "tips": zod.array(zod.string()),
-  "summary": zod.string().nullish()
+  "summary": zod.string().nullish(),
+  "platformsFound": zod.array(zod.object({
+  "name": zod.string(),
+  "url": zod.string(),
+  "reputation": zod.enum(['major', 'moderate', 'obscure']),
+  "exists": zod.boolean()
+})).optional(),
+  "remediation": zod.array(zod.object({
+  "service": zod.string(),
+  "domain": zod.string().nullish(),
+  "dataDeleteUrl": zod.string().nullish(),
+  "steps": zod.array(zod.string()),
+  "breachDate": zod.string().nullish()
+})).optional(),
+  "isCommonPassword": zod.boolean().optional()
 })
 
 
 /**
- * Returns the full catalog of known data breaches from HIBP
  * @summary Get all known breaches
  */
 export const GetBreachCatalogResponseItem = zod.object({
@@ -80,7 +91,6 @@ export const GetBreachCatalogResponse = zod.array(GetBreachCatalogResponseItem)
 
 
 /**
- * Returns aggregate statistics about the breach landscape
  * @summary Get breach statistics
  */
 export const GetBreachStatsResponse = zod.object({

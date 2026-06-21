@@ -9,9 +9,10 @@
 export * from './breachEntry';
 export * from './breachQuery';
 export * from './breachQueryType';
+export * from './breachRemediation';
 export * from './breachResult';
+export * from './breachResultPrivacyGrade';
 export * from './breachResultQuery';
-export * from './breachResultRiskLevel';
 export * from './breachSource';
 export * from './breachSourceRiskLevel';
 export * from './breachStats';
@@ -20,3 +21,5 @@ export * from './breachStatsMostCommonDataTypesItem';
 export * from './breachStatsNewestBreach';
 export * from './errorResponse';
 export * from './healthStatus';
+export * from './platformPresence';
+export * from './platformPresenceReputation';

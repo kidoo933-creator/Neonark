@@ -49,7 +49,6 @@ export const getHealthCheckUrl = () => {
 }
 
 /**
- * Returns server health status
  * @summary Health check
  */
 export const healthCheck = async ( options?: RequestInit): Promise<HealthStatus> => {
@@ -127,7 +126,6 @@ export const getCheckBreachUrl = () => {
 }
 
 /**
- * Checks email, phone, username, IP, password, or domain against breach databases
  * @summary Check data for breaches
  */
 export const checkBreach = async (breachQuery: BreachQuery, options?: RequestInit): Promise<BreachResult> => {
@@ -199,7 +197,6 @@ export const getGetBreachCatalogUrl = () => {
 }
 
 /**
- * Returns the full catalog of known data breaches from HIBP
  * @summary Get all known breaches
  */
 export const getBreachCatalog = async ( options?: RequestInit): Promise<BreachEntry[]> => {
@@ -277,7 +274,6 @@ export const getGetBreachStatsUrl = () => {
 }
 
 /**
- * Returns aggregate statistics about the breach landscape
  * @summary Get breach statistics
  */
 export const getBreachStats = async ( options?: RequestInit): Promise<BreachStats> => {
