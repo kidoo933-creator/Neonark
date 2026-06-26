@@ -1,24 +1,31 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
-    <title>Neon Ark - Breach Intelligence</title>
-    <meta name="description" content="Neon Ark: Advanced breach intelligence and digital footprint scanner. Check if your data has been compromised." />
-    <meta name="robots" content="index, follow" />
-    <meta property="og:title" content="Neon Ark - Breach Intelligence" />
-    <meta property="og:description" content="Advanced breach intelligence and digital footprint scanner." />
-    <meta property="og:type" content="website" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Neon Ark" />
-    <meta name="twitter:description" content="Check if your data has been compromised." />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+import path from "path";
+
+export default defineConfig({
+  base: process.env.BASE_PATH || "/",
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "src"),
+      "@assets": path.resolve(__dirname, "..", "..", "attached_assets"),
+    },
+    dedupe: ["react", "react-dom"],
+  },
+  root: path.resolve(__dirname),
+  build: {
+    outDir: path.resolve(__dirname, "dist/public"),
+    emptyOutDir: true,
+  },
+  server: {
+    port: Number(process.env.PORT) || 3000,
+    strictPort: true,
+    host: "0.0.0.0",
+    fs: { strict: true },
+  },
+  preview: {
+    port: Number(process.env.PORT) || 3000,
+    host: "0.0.0.0",
+  },
+});
