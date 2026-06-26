@@ -21,7 +21,7 @@ export default function Home() {
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 h-16 flex items-center gap-2">
           <Shield className="w-6 h-6 text-primary" />
-          <span className="font-bold text-lg tracking-tight">GuardianScan</span>
+          <span className="font-bold text-lg tracking-tight">Neon Ark</span>
           <span className="text-xs font-mono text-muted-foreground ml-2 px-2 py-0.5 rounded-full bg-muted border border-border">v1.0.0</span>
         </div>
       </header>
@@ -64,7 +64,7 @@ export default function Home() {
 
       <footer className="border-t border-border py-8 mt-12 bg-card">
         <div className="container mx-auto px-4 text-center text-sm text-muted-foreground font-mono">
-          GuardianScan System &bull; Secure Databanks &bull; Stay Vigilant
+          Neon Ark • Breach Intelligence Platform • Stay Vigilant
         </div>
       </footer>
     </div>
