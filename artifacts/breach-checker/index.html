@@ -1,24 +1,27 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
-    <title>Neon Ark - Breach Intelligence</title>
-    <meta name="description" content="Neon Ark: Advanced breach intelligence and digital footprint scanner. Check if your data has been compromised." />
-    <meta name="robots" content="index, follow" />
-    <meta property="og:title" content="Neon Ark - Breach Intelligence" />
-    <meta property="og:description" content="Advanced breach intelligence and digital footprint scanner." />
-    <meta property="og:type" content="website" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Neon Ark" />
-    <meta name="twitter:description" content="Check if your data has been compromised." />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
+{
+  "name": "@workspace/breach-checker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@workspace/api-client-react": "workspace:*",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "lucide-react": "^0.456.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "@tailwindcss/vite": "^4.0.0",
+    "prettier": "^3.3.3",
+    "typescript": "\~5.6.3",
+    "vite": "^6.0.0"
+  }
+}
