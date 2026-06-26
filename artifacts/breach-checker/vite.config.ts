@@ -4,14 +4,8 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 
 export default defineConfig({
-  // Base path for deployment (use "/" for root, or "/repo-name/" if in subdirectory)
   base: process.env.BASE_PATH || "/",
-
-  plugins: [
-    react(),
-    tailwindcss(),
-  ],
-
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
@@ -19,23 +13,17 @@ export default defineConfig({
     },
     dedupe: ["react", "react-dom"],
   },
-
   root: path.resolve(__dirname),
-
   build: {
     outDir: path.resolve(__dirname, "dist/public"),
     emptyOutDir: true,
   },
-
   server: {
     port: Number(process.env.PORT) || 3000,
     strictPort: true,
     host: "0.0.0.0",
-    fs: {
-      strict: true,
-    },
+    fs: { strict: true },
   },
-
   preview: {
     port: Number(process.env.PORT) || 3000,
     host: "0.0.0.0",
