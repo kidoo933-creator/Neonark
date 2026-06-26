@@ -29,11 +29,10 @@ export default defineConfig({
     host: "0.0.0.0",
   },
 });
-export default defineConfig({
+
   css: {
     transformer: 'lightningcss', // or try 'postcss'
     lightningcss: {
       // options to force fallback or specific target
     }
   }
-})
